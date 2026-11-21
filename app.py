@@ -16,6 +16,47 @@ MAX_IMAGE_BYTES = 5 * 1024 * 1024
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
 
+def get_gemini_api_key():
+    """
+    Obtém a chave sem expor seu valor.
+    Prioridade: GEMINI_API_KEY do ambiente, GOOGLE_API_KEY como alternativa,
+    e por último um arquivo .env local (útil em testes locais).
+    """
+    # Primeiro, procura os nomes exatos e também tolera espaços no nome.
+    normalized = {
+        str(name).strip().upper(): str(value).strip()
+        for name, value in os.environ.items()
+        if value is not None and str(value).strip()
+    }
+
+    key = normalized.get("GEMINI_API_KEY") or normalized.get("GOOGLE_API_KEY")
+    if key:
+        source = (
+            "GEMINI_API_KEY" if normalized.get("GEMINI_API_KEY")
+            else "GOOGLE_API_KEY"
+        )
+        return key, source
+
+    # Leitura simples de .env sem exigir dependência adicional.
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.isfile(env_path):
+        try:
+            with open(env_path, "r", encoding="utf-8") as env_file:
+                for line in env_file:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    name, value = line.split("=", 1)
+                    if name.strip().upper() in {"GEMINI_API_KEY", "GOOGLE_API_KEY"}:
+                        value = value.strip().strip('"').strip("'")
+                        if value:
+                            return value, ".env"
+        except OSError:
+            app.logger.exception("Não foi possível ler o arquivo .env")
+
+    return "", None
+
+
 @app.get("/")
 def home():
     return send_from_directory(app.static_folder, "index.html")
@@ -23,16 +64,20 @@ def home():
 
 @app.get("/health")
 def health():
+    api_key, key_source = get_gemini_api_key()
+    # Nunca retorna a chave nem qualquer parte dela.
     return jsonify({
         "status": "ok",
         "service": "TSA International",
-        "gemini_configured": bool(os.environ.get("GEMINI_API_KEY", "").strip())
+        "gemini_configured": bool(api_key),
+        "gemini_key_source": key_source,
+        "checked_environment_names": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
     })
 
 
 @app.post("/api/analyze")
 def analyze():
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    api_key, _key_source = get_gemini_api_key()
     if not api_key:
         return jsonify({
             "error": "GEMINI_API_KEY não configurada. Adicione essa variável em Render > Environment."
